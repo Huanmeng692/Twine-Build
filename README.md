@@ -189,6 +189,87 @@ resources/icon.png
 - `windows-exe`
 - `android-apk-debug` 或 `android-apk-release`
 
+## 6. 本地构建（不使用 GitHub Actions）
+
+如果不想把故事上传到 GitHub，或希望在本机直接出包调试，可以改用附带的本地构建脚本 `build-local.ps1`。EXE 与 APK 两条链路都可以完全在本地完成，不依赖云端 runner。
+
+### 环境要求
+
+| 目标 | 必需 | 说明 |
+|---|---|---|
+| Windows EXE | Node.js | 20 或更高版本。不需要 Java、Android SDK 或 Visual Studio |
+| Android APK | Node.js | 同上，建议与工作流保持一致（Node 24） |
+| | JDK 21 | Android Gradle Plugin 8.13 要求 Java 21；JDK 25/26 等更高版本会导致构建失败 |
+| | Android SDK | 至少包含 `platform-tools`、`build-tools;36.0.0`、`platforms;android-36` |
+
+Android SDK 可以装完整的 Android Studio，也可以只装命令行工具（体积小得多）。命令行方式：
+
+1. 从 [Android 开发者网站](https://developer.android.com/studio#command-line-tools-only) 下载 command-line tools 压缩包。
+2. 解压到 `<SDK 目录>\cmdline-tools\latest\`。`latest` 这一层不能省略，`sdkmanager` 依赖它定位 SDK 根目录。
+3. 安装所需组件：
+
+```powershell
+sdkmanager --sdk_root="D:\Android\Sdk" "platform-tools" "build-tools;36.0.0" "platforms;android-36"
+```
+
+### 环境变量
+
+本地构建依赖以下几个环境变量（设为用户级变量即可，设置后需重开终端）：
+
+| 变量 | 示例值 | 用途 |
+|---|---|---|
+| `JAVA_HOME` | `D:\APP\JDK21` | 供 Gradle 使用。**务必确认它指向 JDK 21**，若被更高版本覆盖会导致构建失败 |
+| `ANDROID_HOME` | `D:\APP\Android\Sdk` | Android SDK 根目录 |
+| `ANDROID_SDK_ROOT` | 与 `ANDROID_HOME` 相同 | 部分旧工具仍读取该变量 |
+
+### 一键构建
+
+```powershell
+cd <项目目录>
+.\build-local.ps1
+```
+
+脚本会依次完成：生成 `dist-web` → 同步 web 资源到 Android 工程（首次运行会自动创建工程并注入配置）→ Gradle 构建 → 将 APK 归档到 `release/apk/` 并生成 SHA-256 校验文件。任意一步失败都会中止并指出原因。
+
+只重新打包、不重新同步 web 资源时：
+
+```powershell
+.\build-local.ps1 -SkipSync
+```
+
+若提示禁止运行脚本，先执行一次：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+### 手动构建 APK
+
+不使用脚本时，等价步骤为：
+
+```powershell
+node builder/prepare.mjs
+npx cap add android              # 仅首次需要
+node builder/configure-android.mjs
+npx cap sync android
+cd android
+.\gradlew.bat assembleDebug
+```
+
+产物位于 `android\app\build\outputs\apk\debug\app-debug.apk`。
+
+### 两点需要留意
+
+- **Gradle 分发包下载**：首次构建会从 `services.gradle.org` 拉取约 200 MB 的分发包。网络不通畅时，可将 `android/gradle/wrapper/gradle-wrapper.properties` 中的 `distributionUrl` 改为国内镜像（例如 `https://mirrors.cloud.tencent.com/gradle/`）。`android/` 已被 git 忽略，该改动不会进入版本库。
+- **依赖安装**：`npm ci` 从 npm 官方源下载依赖，国内网络建议配置镜像源。
+
+### Android 端的运行时增强
+
+模板生成的应用除承载故事外，还会在原生层自动补上两项能力，无需额外配置：
+
+- **沉浸式全屏**：隐藏状态栏与导航栏，适配刘海区域，从屏幕边缘滑动可临时呼出系统栏。
+- **存档落盘**：Story 中的「保存到磁盘」会写入系统「下载」目录。SugarCube 等格式的磁盘存档依赖 WebView 的下载通道，原生层未注册时点击会毫无反应，模板已补齐该通道。
+
 ## Windows 产物
 
 `windows-exe` Artifact 只包含一个 NSIS 安装程序。GitHub 下载 Artifact 时固定会在外面套一层 ZIP，解压后只需保留其中的 `.exe`。安装器默认按当前用户安装，不强制要求管理员权限；卸载时不会主动删除 Electron 用户数据目录，以免误删游戏存档。
